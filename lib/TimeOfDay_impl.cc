@@ -738,13 +738,17 @@ bool TimeOfDay_impl::stop() {
 	// Signal stop
 	stopThreads = true;
 
-	// Wait for all threads to terminate
-	while (triggerThreadRunning) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(1)); // sleep 1 millisec
-	}
-
-	// clean up
+	// Reap the thread properly. std::thread's destructor calls
+	// std::terminate() outright if the thread is still "joinable" (i.e.
+	// join()/detach() was never called) - it does NOT matter whether the
+	// OS thread has already finished running. The old code busy-waited on
+	// triggerThreadRunning and then delete'd the std::thread object
+	// without ever joining it, which crashes on every single teardown
+	// via std::terminate(), not just as a rare race.
 	if (triggerThread) {
+		if (triggerThread->joinable()) {
+			triggerThread->join();
+		}
 		delete triggerThread;
 		triggerThread = NULL;
 	}
@@ -761,6 +765,14 @@ TimeOfDay_impl::~TimeOfDay_impl()
 }
 
 void TimeOfDay_impl::sendMsg(bool state) {
+	// Never publish once shutdown has begun - the scheduler may have
+	// already started tearing down message-port subscribers, and an
+	// uncaught exception here (thrown from inside this background
+	// thread) turns into std::terminate().
+	if (stopThreads) {
+		return;
+	}
+
 	int newState;
 	if (state) {
 		newState = 1;
@@ -770,7 +782,14 @@ void TimeOfDay_impl::sendMsg(bool state) {
 	}
 
 	pmt::pmt_t pdu = pmt::cons( pmt::intern("state"), pmt::from_long(newState) );
-	message_port_pub(pmt::mp("trigger"),pdu);
+
+	try {
+		message_port_pub(pmt::mp("trigger"),pdu);
+	} catch (const std::exception &e) {
+		// Swallow - we're most likely racing block teardown. Losing a
+		// state message here is harmless; crashing the whole process
+		// via std::terminate() is not.
+	}
 }
 
 bool TimeOfDay_impl::timeLessThanOrEqual(int hour1,int minute1, int second1, int hour2, int minute2, int second2) {
@@ -861,7 +880,7 @@ void TimeOfDay_impl::runTriggerThread() {
 		prev_minute = minutes;
 		prev_sec = seconds;
 
-		std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 10 ms sleep
+		std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 1 ms sleep (was 10ms - shrinks the shutdown race window)
 	}
 
 	triggerThreadRunning = false;

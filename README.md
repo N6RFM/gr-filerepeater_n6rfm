@@ -50,3 +50,23 @@ Notes:
 
 See the sample flowgraph for a basic example.
 
+
+## Fixes in this fork
+
+This fork (originally forked from [ghostop14/gr-filerepeater](https://github.com/ghostop14/gr-filerepeater))
+includes the following fix:
+
+- **Fixed a `std::terminate()` crash on every flowgraph stop when `TimeOfDay` was in use.**
+  `TimeOfDay_impl::stop()` previously busy-waited on a flag and then `delete`d the block's
+  `std::thread*` without ever calling `.join()` on it. Per the C++ standard, destroying a
+  `std::thread` object that is still "joinable" (i.e. never joined or detached) calls
+  `std::terminate()` immediately and unconditionally - it does not matter whether the underlying
+  OS thread had already finished running. This crashed the entire GNU Radio process (`terminate
+  reached from thread id: ... gr::tagged_stream_block::check_topology ... std::terminate()`) on
+  every single flowgraph stop where a `TimeOfDay` block was present. Fixed by properly joining the
+  thread in `stop()` before deleting it.
+
+- As a secondary safety measure, `sendMsg()` now checks that shutdown hasn't already begun before
+  publishing a message, and wraps the publish call in a try/catch, to guard against a rarer
+  teardown race with the scheduler's message-port subscriber cleanup.
+
