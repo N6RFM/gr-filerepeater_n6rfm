@@ -62,6 +62,28 @@ endif(APPLE)
 # Install built library files
 ########################################################################
 include(GrMiscUtils)
+
+# Clean up stale git-hash-versioned libraries before installing the new one.
+# Each build produces a uniquely-named libgnuradio-filerepeater.so.g<hash>
+# file (see GrVersion.cmake), and CMake's own install-time symlink creation
+# does not reliably repoint the intermediate .so.<LIBVER> symlink away from
+# an old .so.g<hash> file left over from a previous install. Left alone,
+# this can silently leave the flowgraph running a stale (potentially
+# unfixed/crashing) build even after a clean rebuild. Removing anything
+# that doesn't match the version being installed right now guarantees the
+# symlink chain created below can only ever point at the current build.
+install(CODE "
+    set(_gr_filerepeater_libdir \"\$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${GR_LIBRARY_DIR}\")
+    file(GLOB _gr_filerepeater_old_versioned_libs
+        \"\${_gr_filerepeater_libdir}/libgnuradio-filerepeater.so.g*\")
+    foreach(_gr_filerepeater_old_lib \${_gr_filerepeater_old_versioned_libs})
+        if(NOT _gr_filerepeater_old_lib STREQUAL \"\${_gr_filerepeater_libdir}/libgnuradio-filerepeater.so.${VERSION}\")
+            message(STATUS \"Removing stale versioned library: \${_gr_filerepeater_old_lib}\")
+            file(REMOVE \${_gr_filerepeater_old_lib})
+        endif()
+    endforeach()
+")
+
 GR_LIBRARY_FOO(gnuradio-filerepeater)
 
 ########################################################################
