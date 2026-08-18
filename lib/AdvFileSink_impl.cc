@@ -932,7 +932,7 @@ namespace gr {
     	tm* timePtr = localtime(&t);
 
     	string year = to_string(timePtr->tm_year + 1900);
-    	string month = to_string(timePtr->tm_mon);
+    	string month = to_string(timePtr->tm_mon + 1);
     	string day = to_string(timePtr->tm_mday);
     	string hour = to_string(timePtr->tm_hour);
     	string minute = to_string(timePtr->tm_min);
@@ -944,7 +944,8 @@ namespace gr {
     	minute = setTwoDigit(minute);
     	sec = setTwoDigit(sec);
 
-    	string datestr = year + underscore + month + underscore + day + underscore + "T" + hour + dash + minute + dash + sec;
+//    	string datestr = year + underscore + month + underscore + day + underscore + "T" + hour + dash + minute + dash + sec;
+        string datestr = year + underscore + (month) + underscore + day + underscore + "T" + hour + dash + minute + dash + sec;
 
     	string filename = d_baseDir + slash + d_baseFile + underscore + sRate + "SPS"+ underscore + sFreq + "Hz" + underscore + datestr + d_fileExtension;
 
