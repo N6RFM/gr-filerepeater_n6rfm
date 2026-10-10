@@ -48,9 +48,8 @@ parameters:
     default: '0'
 -   id: recordOnStart
     label: Record On Start
-    dtype: enum
-    options: ['False', 'True']
-    option_labels: ['No', 'Yes']
+    dtype: raw
+    default: 'True'
 -   id: honorFreqChange
     label: Honor Freq Change
     dtype: enum
