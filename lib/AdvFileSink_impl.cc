@@ -723,7 +723,8 @@ namespace gr {
                                       bool autostartFreqChange,
                                       int bits_per_sample,
                                       bool bUnbuffered,
-                                      bool honorFreqTags)
+                                      bool honorFreqTags,
+                                      float scale)
   {
       return gnuradio::make_block_sptr<AdvFileSink_impl>(datatype,
                                                          itemsize,
@@ -738,14 +739,15 @@ namespace gr {
                                                          autostartFreqChange,
                                                          bits_per_sample,
                                                          bUnbuffered,
-                                                         honorFreqTags);
+                                                         honorFreqTags,
+                                                         scale);
   }
 
     /*
      * The private constructor
      */
     AdvFileSink_impl::AdvFileSink_impl(int datatype, int itemsize, const char *basedir, const char *basefile, double freq, double sampleRate, long maxSize, long maxTimeSec,
-    		bool startRecordingImmediately, bool freqCallback, bool autostartFreqChange, int bits_per_sample, bool bUnbuffered,bool honorFreqTags)
+    		bool startRecordingImmediately, bool freqCallback, bool autostartFreqChange, int bits_per_sample, bool bUnbuffered,bool honorFreqTags, float scale)
       : gr::sync_block("AdvFileSink",
               gr::io_signature::make(0, 1, itemsize),
               gr::io_signature::make(0, 0, 0))
@@ -804,6 +806,30 @@ namespace gr {
         case AFS_DATATYPE_BYTE:
         	d_fileExtension = ".byte";
         	break;
+        case AFS_DATATYPE_SC16:
+        	d_fileExtension = ".sc16";
+        	break;
+        case AFS_DATATYPE_SC8:
+        	d_fileExtension = ".sc8";
+        	break;
+        }
+
+        // sc16 / sc8: complex float input written as scaled interleaved integers.
+        d_out_itemsize = d_itemsize;
+        d_ncplx_per_item = 1;
+        d_scale = 1.0f;
+        d_clip_limit = 0.0f;
+        d_conv_total = d_conv_clipped = 0;
+        d_conv_peak = 0.0f;
+        if (isIntegerIQ()) {
+            if (d_itemsize < (int)sizeof(gr_complex) || (d_itemsize % sizeof(gr_complex)) != 0)
+                throw std::runtime_error("[Advanced File Sink] sc16/sc8 need a complex input");
+            d_ncplx_per_item = d_itemsize / sizeof(gr_complex);
+            const bool is16 = (d_datatype == AFS_DATATYPE_SC16);
+            d_clip_limit = is16 ? 32767.0f : 127.0f;
+            d_scale = (scale > 0.0f) ? scale : d_clip_limit;   // 0 = full scale
+            d_out_itemsize = d_ncplx_per_item * 2 * (is16 ? sizeof(int16_t) : sizeof(int8_t));
+            d_convbuf.clear();
         }
 
         d_fp = NULL;
@@ -1031,6 +1057,9 @@ namespace gr {
 
 	  d_bytesWritten = 0;
 	  d_sample_count = 0;
+	  d_conv_total = 0;
+	  d_conv_clipped = 0;
+	  d_conv_peak = 0.0f;
 
       if (fileOpen) {
     	  start = std::chrono::steady_clock::now();
@@ -1052,6 +1081,17 @@ namespace gr {
     		fclose(d_fp);
     		d_fp = NULL;
 
+    		if (isIntegerIQ() && d_conv_total > 0) {
+    			double pct = 100.0 * (double)d_conv_clipped / (double)d_conv_total;
+    			std::cout << "[Advanced File Sink] " << (d_datatype == AFS_DATATYPE_SC16 ? "sc16" : "sc8")
+    			          << " file closed: scale " << d_scale << ", peak |I or Q| before scaling "
+    			          << d_conv_peak << ", clipped " << d_conv_clipped << " of " << d_conv_total
+    			          << " values (" << pct << " %)" << std::endl;
+    			if (d_conv_clipped > 0)
+    				std::cout << "[Advanced File Sink]   clipping: lower Scale (peak * Scale should stay under "
+    				          << d_clip_limit << ")" << std::endl;
+    		}
+
     		d_currentState = false;
     	}
 	}
@@ -1070,6 +1110,42 @@ namespace gr {
       return (short int)std::lround(sample);
     }
 
+
+    void AdvFileSink_impl::convert_complex(const gr_complex *in, size_t ncplx, char *out)
+    {
+        const float *f = reinterpret_cast<const float *>(in);   // I,Q,I,Q,...
+        const size_t n = ncplx * 2;
+        const float lim = d_clip_limit;
+        const float sc = d_scale;
+        unsigned long long clipped = 0;
+        float peak = d_conv_peak;
+
+        if (d_datatype == AFS_DATATYPE_SC16) {
+            int16_t *o = reinterpret_cast<int16_t *>(out);
+            for (size_t i = 0; i < n; i++) {
+                float a = std::fabs(f[i]);
+                if (a > peak) peak = a;
+                float v = f[i] * sc;
+                if (v > lim) { v = lim; clipped++; }
+                else if (v < -lim) { v = -lim; clipped++; }
+                o[i] = (int16_t)std::lrintf(v);
+            }
+        }
+        else {
+            int8_t *o = reinterpret_cast<int8_t *>(out);
+            for (size_t i = 0; i < n; i++) {
+                float a = std::fabs(f[i]);
+                if (a > peak) peak = a;
+                float v = f[i] * sc;
+                if (v > lim) { v = lim; clipped++; }
+                else if (v < -lim) { v = -lim; clipped++; }
+                o[i] = (int8_t)std::lrintf(v);
+            }
+        }
+        d_conv_total += n;
+        d_conv_clipped += clipped;
+        d_conv_peak = peak;
+    }
 
 	void AdvFileSink_impl::handleMsgStream(pmt::pmt_t msg)
     {
@@ -1105,7 +1181,17 @@ namespace gr {
         }
 
         char *inbuf;
+        size_t wsize = d_itemsize;      // bytes per item actually written
+        std::vector<char> pdubuf;
         switch(d_datatype) {
+        case AFS_DATATYPE_SC16:
+        case AFS_DATATYPE_SC8:
+			cc_samples = pmt::c32vector_elements(data,noutput_items);
+			wsize = d_out_itemsize / d_ncplx_per_item;   // PDU length counts complex samples
+			pdubuf.resize(noutput_items * wsize);
+			convert_complex(cc_samples, noutput_items, pdubuf.data());
+			inbuf = pdubuf.data();
+			break;
         case AFS_DATATYPE_COMPLEX:
 			cc_samples = pmt::c32vector_elements(data,noutput_items);
 	        inbuf = (char*)cc_samples;
@@ -1135,7 +1221,7 @@ namespace gr {
             while(nwritten < noutput_items) {
             	// fwrite: returns number of elements written
             	// Takes: ptr to array of elements, element size, count, file stream pointer
-              long count = fwrite(inbuf, d_itemsize, noutput_items - nwritten, d_fp);
+              long count = fwrite(inbuf, wsize, noutput_items - nwritten, d_fp);
               if(count == 0) {
             	  // Error condition, nothing written for some reason.
                 if(ferror(d_fp)) {
@@ -1148,7 +1234,7 @@ namespace gr {
                 }
               }
               nwritten += count;
-              inbuf += count * d_itemsize;
+              inbuf += count * wsize;
             }
         }
         else {
@@ -1180,7 +1266,7 @@ namespace gr {
             }
         }
 
-        d_bytesWritten += nwritten * d_itemsize;
+        d_bytesWritten += nwritten * wsize;
 
         // We wait till the end to do size and time checks.  This could mean that we would
         // run over slightly, but it's faster than doing these checks continuously throughout the writing loop.
@@ -1248,13 +1334,21 @@ namespace gr {
 
         long  nwritten = 0;
 
+        size_t wsize = d_itemsize;      // bytes per item actually written
         if (d_datatype != AFS_DATATYPE_WAV) {
             char *inbuf = (char*)input_items[0];
+            if (isIntegerIQ()) {
+                if (d_convbuf.size() < (size_t)noutput_items * d_out_itemsize)
+                    d_convbuf.resize((size_t)noutput_items * d_out_itemsize);
+                convert_complex((const gr_complex*)input_items[0], (size_t)noutput_items * d_ncplx_per_item, d_convbuf.data());
+                inbuf = d_convbuf.data();
+                wsize = d_out_itemsize;
+            }
 
             while(nwritten < noutput_items) {
             	// fwrite: returns number of elements written
             	// Takes: ptr to array of elements, element size, count, file stream pointer
-              long count = fwrite(inbuf, d_itemsize, noutput_items - nwritten, d_fp);
+              long count = fwrite(inbuf, wsize, noutput_items - nwritten, d_fp);
               if(count == 0) {
             	  // Error condition, nothing written for some reason.
                 if(ferror(d_fp)) {
@@ -1267,7 +1361,7 @@ namespace gr {
                 }
               }
               nwritten += count;
-              inbuf += count * d_itemsize;
+              inbuf += count * wsize;
             }
         }
         else {
@@ -1302,7 +1396,7 @@ namespace gr {
         if (d_bUnbuffered)
         	fflush(d_fp);
 
-        d_bytesWritten += nwritten * d_itemsize;
+        d_bytesWritten += nwritten * wsize;
 
         // We wait till the end to do size and time checks.  This could mean that we would
         // run over slightly, but it's faster than doing these checks continuously throughout the writing loop.

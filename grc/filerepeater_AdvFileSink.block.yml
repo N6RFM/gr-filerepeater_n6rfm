@@ -16,20 +16,27 @@ parameters:
 -   id: type
     label: Input Type
     dtype: enum
-    options: [complex, float, floatwav, int, short, byte]
-    option_labels: [Complex, Float, WAV File (Float), Int, Short, Byte]
+    options: [complex, float, floatwav, int, short, byte, sc16, sc8]
+    option_labels: [Complex (fc32 file), Float, WAV File (Float), Int, Short, Byte,
+        Complex -> sc16 file (int16 I/Q), Complex -> sc8 file (int8 I/Q)]
     option_attributes:
-        datatype: ['1', '2', '6', '3', '4', '5']
-        hide_wav: [all, all, 'none', all, all, all]
+        datatype: ['1', '2', '6', '3', '4', '5', '7', '8']
+        hide_wav: [all, all, 'none', all, all, all, all, all]
+        hide_scale: [all, all, all, all, all, all, 'none', 'none']
         size: [gr.sizeof_gr_complex, gr.sizeof_float, gr.sizeof_float, gr.sizeof_int,
-            gr.sizeof_short, gr.sizeof_char]
-        typename: [complex, float, float, int, short, byte]
+            gr.sizeof_short, gr.sizeof_char, gr.sizeof_gr_complex, gr.sizeof_gr_complex]
+        typename: [complex, float, float, int, short, byte, complex, complex]
     hide: part
 -   id: bits_per_sample
     label: Bits per Sample
     dtype: int
     default: '8'
     hide: ${ type.hide_wav }
+-   id: scale
+    label: Scale (sc16/sc8)
+    dtype: float
+    default: '0'
+    hide: ${ type.hide_scale }
 -   id: radioCenterFreq
     label: Frequency
     dtype: float
@@ -94,7 +101,7 @@ templates:
     imports: import filerepeater
     make: filerepeater.AdvFileSink(${type.datatype}, ${type.size}*${vlen}, ${basedir},
         ${basefile}, ${radioCenterFreq}, ${sampleRate}, ${maxSize}, ${maxTimeSec},${recordOnStart},${honorFreqChange},${autostartFreqChange},
-        ${bits_per_sample},${unbuffered},${honorFreqTags})
+        ${bits_per_sample},${unbuffered},${honorFreqTags},${scale})
     callbacks:
     - setCenterFrequency(${radioCenterFreq})
 
@@ -106,6 +113,8 @@ documentation: |-
     Honor Freq Change indicates to the block how to handle a changing frequency.  If set to yes and recording is taking place, the file will be closed and a new one will be started with the new frequency in the designator.
 
     Autostart on freq change, indicates if file recording will automatically start (if not started), or stop/start a new file when a new frequency is set.  NOTE: for autostart to function, honor freq change also needs to be set.
+
+    Input Type "Complex" writes the raw complex float stream (8 bytes per sample, "fc32").  "Complex -> sc16 file" and "Complex -> sc8 file" take the same complex float input but write interleaved signed 16-bit or 8-bit I,Q integers (4 or 2 bytes per sample, files end in .sc16 / .sc8).  Each value is multiplied by Scale and rounded; values beyond full scale are clipped.  Scale 0 means full scale (32767 for sc16, 127 for sc8), which suits a float input that stays within +/-1.  When a file is closed the block prints the peak value seen, the scale used and how many values were clipped, so you can adjust Scale: keep peak x Scale under the full-scale value.  A weak-signal source with a small noise floor needs a larger Scale for sc8 (for example 1/(4 x noise standard deviation) x 127 puts the noise at about 32 steps), but the same Scale must also keep the strongest signal below full scale.
 
     The data_in connector can be used to pass data packets in for recording as if they had come through the work stream.
 

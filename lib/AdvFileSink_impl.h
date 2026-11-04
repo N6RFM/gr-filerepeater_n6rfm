@@ -680,6 +680,8 @@
 
 #include <filerepeater/AdvFileSink.h>
 #include <chrono>
+#include <cstdint>
+#include <vector>
 #include <ctime>
 #include <gnuradio/thread/thread.h>
 
@@ -691,6 +693,8 @@ using namespace std;
 #define AFS_DATATYPE_SHORT 4
 #define AFS_DATATYPE_BYTE 5
 #define AFS_DATATYPE_WAV 6
+#define AFS_DATATYPE_SC16 7   // complex float in, interleaved int16 I,Q out
+#define AFS_DATATYPE_SC8 8    // complex float in, interleaved int8 I,Q out
 
 namespace gr {
   namespace filerepeater {
@@ -733,6 +737,15 @@ namespace gr {
       	int d_normalize_fac;
       	int d_normalize_shift;
       	int d_nchans;
+        // sc16 / sc8 conversion (complex float in, scaled integer I/Q out)
+        size_t d_out_itemsize;        // bytes written to the file per input item
+        size_t d_ncplx_per_item;      // complex samples per input item (vlen)
+        float d_scale;                // multiplier applied before rounding
+        float d_clip_limit;           // 32767 or 127
+        unsigned long long d_conv_total;   // components converted in the open file
+        unsigned long long d_conv_clipped; // components that hit the clip limit
+        float d_conv_peak;            // largest |component| seen (before scaling)
+        std::vector<char> d_convbuf;  // scratch buffer for work()
         unsigned d_sample_count;
 
         gr::thread::mutex d_mutex;
@@ -748,11 +761,14 @@ namespace gr {
     	virtual void close();
 
     	short int convert_to_short(float sample);
+    	// Convert ncplx complex samples to interleaved int16/int8 at out (2*ncplx values).
+    	void convert_complex(const gr_complex *in, size_t ncplx, char *out);
+    	bool isIntegerIQ() const { return d_datatype == AFS_DATATYPE_SC16 || d_datatype == AFS_DATATYPE_SC8; }
 
      public:
       AdvFileSink_impl(int datatype, int itemsize, const char *basedir, const char *basefile, double freq, double sampleRate,
     		  long maxSize, long maxTimeSec, bool startRecordingImmediately, bool freqCallback, bool autostartFreqChange, int bits_per_sample,
-			  bool bUnbuffered,bool honorFreqTags);
+			  bool bUnbuffered,bool honorFreqTags, float scale);
       ~AdvFileSink_impl();
 
       virtual bool stop();

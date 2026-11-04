@@ -14,7 +14,7 @@
 /* BINDTOOL_GEN_AUTOMATIC(0)                                                       */
 /* BINDTOOL_USE_PYGCCXML(0)                                                        */
 /* BINDTOOL_HEADER_FILE(AdvFileSink.h)                                        */
-/* BINDTOOL_HEADER_FILE_HASH(f29dbf3c3aa39842ad84935b5a60c857)                     */
+/* BINDTOOL_HEADER_FILE_HASH(debcbe4033131111c6792ee808e863c8)                     */
 /***********************************************************************************/
 
 #include <pybind11/complex.h>
@@ -51,6 +51,7 @@ void bind_AdvFileSink(py::module& m)
            py::arg("bits_per_sample"),
            py::arg("bUnbuffered"),
            py::arg("honorFreqTags"),
+           py::arg("scale") = 0.0f,
            D(AdvFileSink,make)
         )
         

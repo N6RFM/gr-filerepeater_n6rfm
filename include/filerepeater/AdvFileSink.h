@@ -686,7 +686,11 @@ namespace gr {
   namespace filerepeater {
 
     /*!
-     * \brief <+description of block+>
+     * \brief Record a stream (or PDUs) to timestamped files, started/stopped by messages.
+     *
+     * datatype 7 (sc16) and 8 (sc8) take a complex float input and write interleaved
+     * signed 16-bit / 8-bit I,Q integers after multiplying by "scale" (0 = full scale:
+     * 32767 for sc16, 127 for sc8). Samples beyond full scale are clipped and counted.
      * \ingroup filerepeater
      *
      */
@@ -705,7 +709,7 @@ namespace gr {
        */
       static sptr make(int datatype, int itemsize, const char *basedir, const char *basefile, double freq, double sampleRate,
     		  	  	  long maxSize, long maxTimeSec, bool startRecordingImmediately, bool freqCallback, bool autostartFreqChange, int bits_per_sample,
-					  bool bUnbuffered, bool honorFreqTags);
+					  bool bUnbuffered, bool honorFreqTags, float scale = 0.0f);
 
       virtual double getCenterFrequency() const = 0;
       virtual void setCenterFrequency(double newValue) = 0;
